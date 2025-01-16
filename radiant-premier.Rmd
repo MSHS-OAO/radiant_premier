@@ -1,0 +1,309 @@
+---
+title: "radiant-premier"
+date: "`r Sys.time()`"
+output: html_document
+---
+
+```{r libraries constants, include=F}
+library(odbc)
+library(DBI)
+library(glue)
+library(dplyr)
+library(tidyr)
+library(dbplyr)
+library(digest)
+
+mods <- c('26', 'TC', '53', '50')
+
+### Additional Exam Logic --------------------------------------------------
+# Exam codes starting with "IR" or "NS" on resource "MSB CT 1" belong to IR
+MSB_CT_1 <- c("IR", "NS")
+# Exam codes starting with "NM PET" on resource "BC PET CT 1" belong to IR
+BC_PET_CT_1 <- "NM PET"
+
+x_days <- 365
+query_date <- Sys.Date() - x_days
+start_time <- Sys.time()
+
+dev_dsn <- "OAO Cloud DB Staging"
+prod_dsn <- "OAO Cloud DB Production"
+```
+
+# Merge Mapping Tables
+```{r merge mapping tables, echo=FALSE}
+merge_costcenter <- glue(
+  "MERGE INTO LPM_RAD_MAPPING_COSTCENTER dest
+   USING OAO_DEVELOPMENT.LPM_RAD_MAPPING_COSTCENTER source
+   ON (dest.RESOURCE_NAME = source.RESOURCE_NAME)
+   WHEN MATCHED THEN
+   UPDATE SET dest.COSTCENTER = source.COSTCENTER
+   WHEN NOT MATCHED THEN
+   INSERT (dest.RESOURCE_NAME,
+           dest.COSTCENTER)
+   VALUES (source.RESOURCE_NAME,
+           source.COSTCENTER);")
+
+merge_cpt_type <- glue(
+  "MERGE INTO LPM_RAD_MAPPING_CPT_TYPE dest
+   USING OAO_DEVELOPMENT.LPM_RAD_MAPPING_CPT_TYPE source
+   ON (dest.DEFINITION_CODE = source.DEFINITION_CODE)
+   WHEN MATCHED THEN
+   UPDATE SET dest.CPT_TYPE = source.CPT_TYPE
+   WHEN NOT MATCHED THEN
+   INSERT (dest.DEFINITION_CODE,
+           dest.CPT_TYPE)
+   VALUES (source.DEFINITION_CODE,
+           source.CPT_TYPE);")
+
+merge_epic_dep <- glue(
+  "MERGE INTO LPM_RAD_MAPPING_EPIC_DEP dest
+   USING OAO_DEVELOPMENT.LPM_RAD_MAPPING_EPIC_DEP source
+   ON (dest.RESOURCE_NAME = source.RESOURCE_NAME)
+   WHEN MATCHED THEN
+   UPDATE SET dest.EPIC_ID = source.EPIC_ID,
+              dest.EPIC_NAME = source.EPIC_NAME
+   WHEN NOT MATCHED THEN
+   INSERT (dest.RESOURCE_NAME,
+           dest.EPIC_ID,
+           dest.EPIC_NAME)
+   VALUES (source.RESOURCE_NAME,
+           source.EPIC_ID,
+           source.EPIC_NAME);")
+
+merge_report <- glue(
+  "MERGE INTO LPM_RAD_MAPPING_REPORT dest
+   USING OAO_DEVELOPMENT.LPM_RAD_MAPPING_REPORT source
+   ON (dest.RESOURCE_NAME = source.RESOURCE_NAME)
+   WHEN MATCHED THEN
+   UPDATE SET dest.DEFINITION_CODE = source.DEFINITION_CODE,
+              dest.DEFINITION_NAME = source.DEFINITION_NAME
+   WHEN NOT MATCHED THEN
+   INSERT (dest.RESOURCE_NAME,
+           dest.DEFINITION_CODE,
+           dest.DEFINITION_NAME)
+   VALUES (source.RESOURCE_NAME,
+           source.DEFINITION_CODE,
+           source.DEFINITION_NAME);")
+
+merge_support <- glue(
+  "MERGE INTO LPM_RAD_MAPPING_SUPPORT dest
+   USING OAO_DEVELOPMENT.LPM_RAD_MAPPING_SUPPORT source
+   ON (dest.RESOURCE_NAME = source.RESOURCE_NAME)
+   WHEN MATCHED THEN
+   UPDATE SET dest.SUPPORT = source.SUPPORT
+   WHEN NOT MATCHED THEN
+   INSERT (dest.RESOURCE_NAME,
+           dest.SUPPORT)
+   VALUES (source.RESOURCE_NAME,
+           source.SUPPORT);")
+
+merge_or <- glue(
+  "MERGE INTO LPM_RAD_MAPPING_OR dest
+   USING OAO_DEVELOPMENT.LPM_RAD_MAPPING_OR source
+   ON (dest.RESOURCE_NAME = source.RESOURCE_NAME)
+   WHEN NOT MATCHED THEN
+   INSERT (dest.RESOURCE_NAME)
+   VALUES (source.RESOURCE_NAME);")
+
+# execute mapping table merge statements
+prod_con <- dbConnect(odbc(), prod_dsn)
+dbBegin(prod_con)
+
+# execute statements and if there is an error  with one of them rollback changes
+tryCatch({
+  dbExecute(prod_con, merge_costcenter)
+  print("LPM_RAD_MAPPING_COSTCENTER has been merged")
+  dbExecute(prod_con, merge_cpt_type)
+  print("LPM_RAD_MAPPING_CPT_TYPE has been merged")
+  dbExecute(prod_con, merge_epic_dep)
+  print("LPM_RAD_MAPPING_epic_dep has been merged")
+  dbExecute(prod_con, merge_report)
+  print("LPM_RAD_MAPPING_REPORT has been merged")
+  dbExecute(prod_con, merge_support)
+  print("LPM_RAD_MAPPING_SUPPORT has been merged")
+  dbExecute(prod_con, merge_or)
+  print("LPM_RAD_MAPPING_OR has been merged")
+  
+  dbCommit(prod_con)
+  dbDisconnect(prod_con)
+  
+  print(paste0(Sys.time(), ": Mapping Tables Merged Successful"))
+  }, 
+  error = function(err){
+    dbRollback(prod_con)
+    dbDisconnect(prod_con)
+    print("Error")
+    }
+  )
+```
+
+# Data Pull
+### Billing
+```{r billing data pull, echo=FALSE}
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+or_resource <- tbl(prod_con, "LPM_RAD_MAPPING_OR") %>%
+  collect() %>%
+  pull()
+
+billing <- tbl(prod_con, "Y_IMG_PREMIER_LABOR_PRODUCTIVITY") %>%
+  filter(SERVICE_DATE >= as.Date(query_date),
+         !(RESOURCE %in% or_resource)) %>%
+  mutate(
+    MODIFIER_ONE = case_when(
+      !(MODIFIER_ONE %in% mods) ~ "",
+      TRUE ~ MODIFIER_ONE),
+    MODIFIER_TWO = case_when(
+      !(MODIFIER_TWO %in% mods) ~ "",
+      TRUE ~ MODIFIER_TWO),
+    MODIFIER_THREE = case_when(
+      !(MODIFIER_THREE %in% mods) ~ "",
+      TRUE ~ MODIFIER_THREE),
+    MODIFIER_FOUR = case_when(
+      !(MODIFIER_FOUR %in% mods) ~ "",
+      TRUE ~ MODIFIER_FOUR),
+    CPT4 = paste0(CHARGE, MODIFIER_ONE, MODIFIER_TWO, MODIFIER_THREE, MODIFIER_FOUR)) %>%
+  left_join(tbl(prod_con, "LPM_MAPPING_PAYCYCLE"),
+            by = c("SERVICE_DATE" = "PAYCYCLE_DATE")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_COSTCENTER"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_EPIC_DEP"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_SUPPORT"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_REPORT"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  rename(RESOURCE_NAME = RESOURCE) %>%
+  mutate(
+    DEFINITION_CODE = case_when(
+      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "MSB_RAD106",
+      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "CCW_RAD108",
+      TRUE ~ DEFINITION_CODE),
+    DEFINITION_NAME = case_when(
+      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "INTERVENTIONAL RADIOLOGY",
+      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "OP NUCLEAR MEDICINE/PET RADIOLOGY",
+      TRUE ~ DEFINITION_NAME),
+    SOURCE_TABLE = "BILLING") %>%
+  select(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+         LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
+         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
+         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE) %>%
+  collect() %>%
+  mutate(UNIQUE_ID = 
+    paste0(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+         LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
+         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
+         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE))
+billing$UNIQUE_ID <- sapply(billing$UNIQUE_ID, digest, algo="md5")
+  
+print(paste0(Sys.time(), ": Billing Data Pulled Successfully"))
+```
+
+### Order
+```{r order data pull, echo=FALSE}
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+or_resource <- tbl(prod_con, "LPM_RAD_MAPPING_OR") %>%
+  collect() %>%
+  pull()
+
+order <- tbl(prod_con, "Y_IMG_PREMIER_LABOR_PRODUCTIVITY_LNKD_CHGS") %>%
+  mutate(SERVICE_DATE = to_date(DATE, 'YYYY-MM-DD')) %>%
+  filter(SERVICE_DATE >= as.Date(query_date),
+         RESOURCE %in% or_resource,
+         CHARGE_TYPE == 'Technical') %>%
+  left_join(tbl(prod_con, "LPM_MAPPING_PAYCYCLE"),
+            by = c("SERVICE_DATE" = "PAYCYCLE_DATE")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_COSTCENTER"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_EPIC_DEP"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_SUPPORT"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_REPORT"),
+            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
+  rename(RESOURCE_NAME = RESOURCE,
+         CPT4 = CPT_CODE) %>%
+  mutate(
+    DEFINITION_CODE = case_when(
+      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "MSB_RAD106",
+      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "CCW_RAD108",
+      TRUE ~ DEFINITION_CODE),
+    DEFINITION_NAME = case_when(
+      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "INTERVENTIONAL RADIOLOGY",
+      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "OP NUCLEAR MEDICINE/PET RADIOLOGY",
+      TRUE ~ DEFINITION_NAME),
+    SOURCE_TABLE = "ORDER") %>%
+  select(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+         LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
+         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
+         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE) %>%
+  collect() %>%
+  mutate(UNIQUE_ID = 
+    paste0(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+         LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
+         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
+         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE))
+order$UNIQUE_ID <- sapply(order$UNIQUE_ID, digest, algo="md5")
+
+
+print(paste0(Sys.time(), ": Order Data Pulled Successfully"))
+```
+
+# Combine Data
+```{r combine data, echo=FALSE}
+combined <- rbind(billing, order)
+
+print(paste0(Sys.time(), ": Billing & Order Data Combined Successfully"))
+```
+
+# Premier Upload Creation
+```{r premier upload, echo=FALSE}
+premier <- combined %>% 
+  mutate(PARTNER = '729805',
+         ENTITY_CODE = case_when(
+           SUPPORT %in% c('MSB', 'MSUS', 'CCW') ~ '630571',
+           SUPPORT %in% c('MSH', 'MSQ') ~ 'NY0014',
+           SUPPORT == 'MSW' ~ 'NY2162',
+           SUPPORT == 'MSM' ~ 'NY2163'),
+         START_DATE = SERVICE_DATE,
+         END_DATE = SERVICE_DATE) %>%
+  rename(COST_CENTER_CODE = COSTCENTER, 
+         CPT_CODE = CPT4) %>%
+  group_by(PARTNER, ENTITY_CODE, COST_CENTER_CODE, START_DATE, END_DATE, CPT_CODE) %>%
+  summarise(ACTUAL_VOLUME = n()) %>%
+  mutate(BUDGET_VOLUME = '0')
+    
+
+print(paste0(Sys.time(), ": Premier Upload Created Successfully"))
+```
+
+# Premier Zero Upload Creation
+```{r zero upload, echo=FALSE}
+premier <- combined %>% 
+  mutate(PARTNER = '729805',
+         ENTITY_CODE = case_when(
+           SUPPORT %in% c('MSB', 'MSUS', 'CCW') ~ '630571',
+           SUPPORT %in% c('MSH', 'MSQ') ~ 'NY0014',
+           SUPPORT == 'MSW' ~ 'NY2162',
+           SUPPORT == 'MSM' ~ 'NY2163'),
+         START_DATE = SERVICE_DATE,
+         END_DATE = SERVICE_DATE) %>%
+  rename(COST_CENTER_CODE = COSTCENTER, 
+         CPT_CODE = CPT4) %>%
+  group_by(PARTNER, ENTITY_CODE, COST_CENTER_CODE, START_DATE, END_DATE, CPT_CODE) %>%
+  summarise(ACTUAL_VOLUME = n()) %>%
+  mutate(BUDGET_VOLUME = '0')
+    
+
+print(paste0(Sys.time(), ": Premier Zero Upload Created Successfully"))
+```
+
+# Truncate Tables
+```{r zero upload, echo=FALSE}
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+truncate_billing
+truncate_order
+truncate_combined
+```
