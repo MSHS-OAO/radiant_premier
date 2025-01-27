@@ -1,7 +1,10 @@
 ---
-title: "radiant-backfill"
+title: "radiant-backfill-`r params$monthyear`"
 date: "`r Sys.time()`"
 output: html_document
+params:
+  start_date: NULL
+  monthyear: NULL
 ---
 
 ```{r libraries constants, include=F}
@@ -23,7 +26,7 @@ MSB_CT_1 <- c("IR", "NS")
 # Exam codes starting with "NM PET" on resource "BC PET CT 1" belong to IR
 BC_PET_CT_1 <- "NM PET"
 
-start_date <- "2024-05-01"
+start_date <- params$start_date
 end_date <- as.character(rollforward(as.Date(start_date)))
 start_time <- Sys.time()
 
@@ -274,7 +277,8 @@ or_resource <- tbl(prod_con, "LPM_RAD_MAPPING_OR") %>%
 
 order <- tbl(prod_con, "Y_IMG_PREMIER_LABOR_PRODUCTIVITY_LNKD_CHGS") %>%
   mutate(SERVICE_DATE = to_date(DATE, 'YYYY-MM-DD')) %>%
-  filter(SERVICE_DATE >= as.Date(query_date),
+  filter(SERVICE_DATE >= as.Date(start_date),
+         SERVICE_DATE <= as.Date(end_date),
          RESOURCE %in% or_resource,
          CHARGE_TYPE == 'Technical') %>%
   left_join(tbl(prod_con, "LPM_MAPPING_PAYCYCLE"),
@@ -476,6 +480,7 @@ registerDoSEQ()
 print(paste0(Sys.time(), ": Premier upload data has been added to LPM_RAD_UPLOAD_STAGING"))
 ```
 
+# Merge Staging to PROD
 ```{r merge staging, echo=FALSE}
 merge_combined <- glue(
   "MERGE INTO LPM_RAD_COMBINED dest
@@ -581,9 +586,9 @@ tryCatch({
 
 # Execution Details
 ```{r runtime, echo=FALSE}
-runtime = round(as.numeric(difftime(Sys.time(), start_time, units = c("mins"))), digits = 2)
-rundate = as.character(Sys.Date() - x_days)
+runtime <- round(as.numeric(difftime(Sys.time(), start_time, units = c("mins"))), digits = 2)
+monthyear <- format(as.Date(start_date), "%B-%Y")
 
 print(paste("Radiant Refresh took", runtime, "minutes to complete"))
-print(paste("Radiant data was refreshed back to", rundate))
+print(paste("Radiant data was backfilled for", monthyear))
 ```
