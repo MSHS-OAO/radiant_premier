@@ -474,6 +474,7 @@ registerDoSEQ()
 print(paste0(Sys.time(), ": Premier upload data has been added to LPM_RAD_UPLOAD_STAGING"))
 ```
 
+# Merge Staging to PROD
 ```{r merge staging, echo=FALSE}
 merge_combined <- glue(
   "MERGE INTO LPM_RAD_COMBINED dest
