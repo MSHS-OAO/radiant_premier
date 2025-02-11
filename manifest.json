@@ -4,10 +4,10 @@
   "platform": "4.2.3",
   "metadata": {
     "appmode": "rmd-static",
-    "primary_rmd": "Backfill/radiant-backfill.Rmd",
+    "primary_rmd": "radiant-refresh.Rmd",
     "primary_html": null,
     "content_category": null,
-    "has_parameters": true
+    "has_parameters": false
   },
   "packages": {
     "DBI": {
