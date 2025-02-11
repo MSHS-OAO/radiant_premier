@@ -14,78 +14,55 @@ library(dbplyr)
 library(digest)
 library(doParallel)
 
+# accepted modifiers
 mods <- c('26', 'TC', '53', '50')
 
-### Additional Exam Logic --------------------------------------------------
+## Additional Exam Logic --------------------------------------------------
 # Exam codes starting with "IR" or "NS" on resource "MSB CT 1" belong to IR
 MSB_CT_1 <- c("IR", "NS")
 # Exam codes starting with "NM PET" on resource "BC PET CT 1" belong to IR
 BC_PET_CT_1 <- "NM PET"
 
-x_days <- 60
+# constats for how much history to query and current time of execution
+x_days <- 14
 query_date <- Sys.Date() - x_days
 start_time <- Sys.time()
 
+# dev and prod dsn strings
 dev_dsn <- "OAO Cloud DB Staging"
 prod_dsn <- "OAO Cloud DB Production"
 
+# function for creating insert statements on LPM_RAD_COMBINED
 get_values_rad <- function(source_table, destination_schema, destination_table) {
   
     SERVICE_DATE      <- source_table[1] # DATE,
-    PP_END_DATE       <- source_table[2] # DATE,
-    ORDER_ID          <- source_table[3] # VARCHAR2(10 char),
-    ACCESSION         <- source_table[4] # VARCHAR2(15 char),
-    EXAM              <- source_table[5] # VARCHAR2(150 char),
-    PARENT_LOCATION   <- source_table[6] # VARCHAR2(50 char),
-    LOCATION          <- source_table[7] # VARCHAR2(50 char),
-    DEPARTMENT        <- source_table[8] # VARCHAR2(50 char),
-    BASE_CLASS        <- source_table[9] # VARCHAR2(15 char),
-    ACCT_CLASS        <- source_table[10] # VARCHAR2(50 char),
-    VISIT             <- source_table[11] # VARCHAR2(20 char),
-    RESOURCE_NAME     <- source_table[12] # VARCHAR2(100 char),
-    MODALITY          <- source_table[13] # VARCHAR2(50 char),
-    CPT4              <- source_table[14] # VARCHAR2(15 char),
-    EPIC_ID           <- source_table[15] # VARCHAR2(15 char),
-    EPIC_NAME         <- source_table[16] # VARCHAR2(100 char),
-    SUPPORT           <- source_table[17] # VARCHAR2(15 char),
-    DEFINITION_CODE   <- source_table[18] # VARCHAR2(15 char),
-    DEFINITION_NAME   <- source_table[19] # VARCHAR2(60 char),
-    COSTCENTER        <- source_table[20] # VARCHAR2(15 char),
-    SOURCE_TABLE      <- source_table[21] # VARCHAR2(15 char),
-    UNIQUE_ID         <- source_table[22] # VARCHAR2(50 char)
+    ORDER_ID          <- source_table[2] # VARCHAR2(10 char),
+    ACCESSION         <- source_table[3] # VARCHAR2(15 char),
+    EXAM              <- source_table[4] # VARCHAR2(150 char),
+    PARENT_LOCATION   <- source_table[5] # VARCHAR2(50 char),
+    LOCATION          <- source_table[6] # VARCHAR2(50 char),
+    DEPARTMENT        <- source_table[7] # VARCHAR2(50 char),
+    BASE_CLASS        <- source_table[8] # VARCHAR2(15 char),
+    ACCT_CLASS        <- source_table[9] # VARCHAR2(50 char),
+    VISIT             <- source_table[10] # VARCHAR2(20 char),
+    RESOURCE_NAME     <- source_table[11] # VARCHAR2(100 char),
+    MODALITY          <- source_table[12] # VARCHAR2(50 char),
+    CPT4              <- source_table[13] # VARCHAR2(15 char),
+    SOURCE_TABLE      <- source_table[14] # VARCHAR2(15 char),
+    UNIQUE_ID         <- source_table[15] # VARCHAR2(50 char),
+    DATE_ADDED        <- source_table[16] # DATE
     
     values <- glue("INTO {glue::double_quote(destination_schema)}.{glue::double_quote(destination_table)}
-                   (SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION, LOCATION, DEPARTMENT,     
-                   BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME, MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT,        
-                   DEFINITION_CODE, DEFINITION_NAME, COSTCENTER, SOURCE_TABLE, UNIQUE_ID)
+                   (SERVICE_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION, LOCATION, DEPARTMENT,     
+                   BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME, MODALITY, CPT4, SOURCE_TABLE, UNIQUE_ID,
+                   DATE_ADDED)
                  
-                   VALUES (TO_DATE('{SERVICE_DATE}', 'yyyy-mm-dd'), TO_DATE('{PP_END_DATE}', 'yyyy-mm-dd'),
+                   VALUES (TO_DATE('{SERVICE_DATE}', 'yyyy-mm-dd'),
                    '{ORDER_ID}', '{ACCESSION}', '{EXAM}', '{PARENT_LOCATION}', '{LOCATION}',
                    '{DEPARTMENT}', '{BASE_CLASS}', '{ACCT_CLASS}', '{VISIT}', '{RESOURCE_NAME}',
-                   '{MODALITY}', '{CPT4}', '{EPIC_ID}', '{EPIC_NAME}', '{SUPPORT}', '{DEFINITION_CODE}',  
-                   '{DEFINITION_NAME}', '{COSTCENTER}', '{SOURCE_TABLE}', '{UNIQUE_ID}')")
+                   '{MODALITY}', '{CPT4}', '{SOURCE_TABLE}', '{UNIQUE_ID}', TO_DATE('{DATE_ADDED}', 'yyyy-mm-dd'))")
     
     return(values)
-}
-
-get_values_premier <- function(source_table, destination_schema, destination_table) {
-    PARTNER          <- source_table[1] #VARCHAR2(10 char),
-    ENTITY_CODE      <- source_table[2] #VARCHAR2(10 char),
-    COST_CENTER_CODE <- source_table[3] #VARCHAR2(15 char),
-    START_DATE       <- source_table[4] #DATE,
-    END_DATE         <- source_table[5] #DATE,
-    CPT_CODE         <- source_table[6] #VARCHAR2(15 char),
-    ACTUAL_VOLUME    <- source_table[7] #NUMERIC,
-    BUDGET_VOLUME    <- source_table[8] #VARCHAR2(5 char)
-    UNIQUE_ID        <- source_table[9] #VARCHAR2(50 char)
-    
-    values <- glue("INTO {glue::double_quote(destination_schema)}.{glue::double_quote(destination_table)}
-                   (PARTNER, ENTITY_CODE, COST_CENTER_CODE, START_DATE, END_DATE,
-                   CPT_CODE, ACTUAL_VOLUME, BUDGET_VOLUME, UNIQUE_ID)
-                 
-                   VALUES ('{PARTNER}', '{ENTITY_CODE}', '{COST_CENTER_CODE}', 
-                   TO_DATE('{START_DATE}', 'yyyy-mm-dd'), TO_DATE('{END_DATE}', 'yyyy-mm-dd'),
-                   '{CPT_CODE}', '{ACTUAL_VOLUME}', '{BUDGET_VOLUME}', '{UNIQUE_ID}')")
 }
 ```
 
@@ -200,15 +177,19 @@ tryCatch({
 # Data Pull
 ### Billing
 ```{r billing data pull, echo=FALSE}
+# prod connection
 prod_con <- dbConnect(odbc(), prod_dsn)
 
+# get list of OR resources to ignore in billing data
 or_resource <- tbl(prod_con, "LPM_RAD_MAPPING_OR") %>%
   collect() %>%
   pull()
 
+# query billing data that has been posted since query date variable
 billing <- tbl(prod_con, "Y_IMG_PREMIER_LABOR_PRODUCTIVITY") %>%
   filter(POST_DATE >= as.Date(query_date),
          !(RESOURCE %in% or_resource)) %>%
+  # edit mods to only acceptable mods
   mutate(
     MODIFIER_ONE = case_when(
       !(MODIFIER_ONE %in% mods) ~ "",
@@ -222,41 +203,21 @@ billing <- tbl(prod_con, "Y_IMG_PREMIER_LABOR_PRODUCTIVITY") %>%
     MODIFIER_FOUR = case_when(
       !(MODIFIER_FOUR %in% mods) ~ "",
       TRUE ~ MODIFIER_FOUR),
+    # create cpt as combo of charge and all mods
     CPT4 = paste0(CHARGE, MODIFIER_ONE, MODIFIER_TWO, MODIFIER_THREE, MODIFIER_FOUR)) %>%
-  left_join(tbl(prod_con, "LPM_MAPPING_PAYCYCLE"),
-            by = c("SERVICE_DATE" = "PAYCYCLE_DATE")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_COSTCENTER"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_EPIC_DEP"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_SUPPORT"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_REPORT"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
   rename(RESOURCE_NAME = RESOURCE) %>%
-  mutate(
-    DEFINITION_CODE = case_when(
-      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "MSB_RAD106",
-      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "CCW_RAD108",
-      TRUE ~ DEFINITION_CODE),
-    DEFINITION_NAME = case_when(
-      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "INTERVENTIONAL RADIOLOGY",
-      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "OP NUCLEAR MEDICINE/PET RADIOLOGY",
-      TRUE ~ DEFINITION_NAME),
-    SOURCE_TABLE = "BILLING") %>%
-  select(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+  mutate(SOURCE_TABLE = "BILLING") %>%
+  select(SERVICE_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
          LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
-         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
-         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE) %>%
+         MODALITY, CPT4, SOURCE_TABLE) %>%
   collect() %>%
   mutate(
     SERVICE_DATE = as.character(as.Date(SERVICE_DATE)),
-    PP_END_DATE = as.character(as.Date(PP_END_DATE)),
     UNIQUE_ID = 
-    paste0(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+    paste0(SERVICE_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
          LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
-         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
-         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE))
+         MODALITY, CPT4, SOURCE_TABLE),
+    DATE_ADDED = as.character(Sys.Date()))
 billing$UNIQUE_ID <- sapply(billing$UNIQUE_ID, digest, algo="md5")
   
 print(paste0(Sys.time(), ": Billing Data Pulled Successfully"))
@@ -264,92 +225,62 @@ print(paste0(Sys.time(), ": Billing Data Pulled Successfully"))
 
 ### Order
 ```{r order data pull, echo=FALSE}
+# prod connection
 prod_con <- dbConnect(odbc(), prod_dsn)
 
+# get list of OR resources to ignore in billing data
 or_resource <- tbl(prod_con, "LPM_RAD_MAPPING_OR") %>%
   collect() %>%
   pull()
 
+# query billing data that has been posted since query date variable
 order <- tbl(prod_con, "Y_IMG_PREMIER_LABOR_PRODUCTIVITY_LNKD_CHGS") %>%
   mutate(SERVICE_DATE = to_date(DATE, 'YYYY-MM-DD')) %>%
   filter(SERVICE_DATE >= as.Date(query_date),
          RESOURCE %in% or_resource,
          CHARGE_TYPE == 'Technical') %>%
-  left_join(tbl(prod_con, "LPM_MAPPING_PAYCYCLE"),
-            by = c("SERVICE_DATE" = "PAYCYCLE_DATE")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_COSTCENTER"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_EPIC_DEP"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_SUPPORT"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_REPORT"),
-            by = c("RESOURCE" = "RESOURCE_NAME")) %>%
   rename(RESOURCE_NAME = RESOURCE,
          CPT4 = CPT_CODE) %>%
-  mutate(
-    DEFINITION_CODE = case_when(
-      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "MSB_RAD106",
-      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "CCW_RAD108",
-      TRUE ~ DEFINITION_CODE),
-    DEFINITION_NAME = case_when(
-      RESOURCE_NAME == "MSB CT 1" & substr(EXAM, 1, 2) %in% MSB_CT_1 ~ "INTERVENTIONAL RADIOLOGY",
-      RESOURCE_NAME == "BC PET CT 1" & substr(EXAM, 1, 6) %in% BC_PET_CT_1 ~ "OP NUCLEAR MEDICINE/PET RADIOLOGY",
-      TRUE ~ DEFINITION_NAME),
-    SOURCE_TABLE = "ORDER") %>%
-  select(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+  mutate(SOURCE_TABLE = "ORDER") %>%
+  select(SERVICE_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
          LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
-         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
-         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE) %>%
+         MODALITY, CPT4, SOURCE_TABLE) %>%
   collect() %>%
   mutate(
     SERVICE_DATE = as.character(as.Date(SERVICE_DATE)),
-    PP_END_DATE = as.character(as.Date(PP_END_DATE)),
     UNIQUE_ID = 
-    paste0(SERVICE_DATE, PP_END_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
+    paste0(SERVICE_DATE, ORDER_ID, ACCESSION, EXAM, PARENT_LOCATION,
          LOCATION, DEPARTMENT, BASE_CLASS, ACCT_CLASS, VISIT, RESOURCE_NAME,
-         MODALITY, CPT4, EPIC_ID, EPIC_NAME, SUPPORT, DEFINITION_CODE,
-         DEFINITION_NAME, COSTCENTER, SOURCE_TABLE))
+         MODALITY, CPT4, SOURCE_TABLE),
+    DATE_ADDED = as.character(Sys.Date()))
 order$UNIQUE_ID <- sapply(order$UNIQUE_ID, digest, algo="md5")
-
 
 print(paste0(Sys.time(), ": Order Data Pulled Successfully"))
 ```
 
 # Combine Data
 ```{r combine data, echo=FALSE}
+# prod connection
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+# combine billing and order linked charges
 combined <- rbind(billing, order)
+
+# get number of rows to be inserted into staging table
+staging_rows <- nrow(combined)
+
+# get number of rows currently in the DB
+total_rows <- tbl(prod_con, "LPM_RAD_COMBINED") %>%
+  summarise(n()) %>%
+  collect() %>%
+  pull()
 
 print(paste0(Sys.time(), ": Billing & Order Data Combined Successfully"))
 ```
 
-# Premier Upload Creation
-```{r premier upload, echo=FALSE, message=FALSE}
-premier <- combined %>% 
-  mutate(PARTNER = '729805',
-         ENTITY_CODE = case_when(
-           SUPPORT %in% c('MSB', 'MSUS', 'CCW') ~ '630571',
-           SUPPORT %in% c('MSH', 'MSQ') ~ 'NY0014',
-           SUPPORT == 'MSW' ~ 'NY2162',
-           SUPPORT == 'MSM' ~ 'NY2163'),
-         START_DATE = SERVICE_DATE,
-         END_DATE = SERVICE_DATE) %>%
-  rename(COST_CENTER_CODE = COSTCENTER, 
-         CPT_CODE = CPT4) %>%
-  group_by(PARTNER, ENTITY_CODE, COST_CENTER_CODE, START_DATE, END_DATE, CPT_CODE) %>%
-  summarise(ACTUAL_VOLUME = n()) %>%
-  mutate(BUDGET_VOLUME = '0',
-         UNIQUE_ID = paste0(PARTNER, ENTITY_CODE, COST_CENTER_CODE, START_DATE,
-                            END_DATE, CPT_CODE, ACTUAL_VOLUME, BUDGET_VOLUME))
-premier$UNIQUE_ID <- sapply(premier$UNIQUE_ID, digest, algo="md5")
-
-print(paste0(Sys.time(), ": Premier Upload Created Successfully"))
-```
-
-# Truncate Tables
-```{r truncate, echo=FALSE}
+# Truncate Staging
+```{r truncate staging, echo=FALSE}
 truncate_combined <- glue("TRUNCATE TABLE LPM_RAD_COMBINED_STAGING;")
-truncate_upload <- glue("TRUNCATE TABLE LPM_RAD_UPLOAD_STAGING;")
 
 # execute mapping table merge statements
 dev_con <- dbConnect(odbc(), dev_dsn)
@@ -359,13 +290,11 @@ dbBegin(dev_con)
 tryCatch({
   dbExecute(dev_con, truncate_combined)
   print("LPM_RAD_COMBINED_STAGING has been truncated")
-  dbExecute(dev_con, truncate_upload)
-  print("LPM_RAD_UPLOAD_STAGING has been truncated")
   
   dbCommit(dev_con)
   dbDisconnect(dev_con)
   
-  print(paste0(Sys.time(), ": Staging Tables Truncated Successfully"))
+  print(paste0(Sys.time(), ": Staging Table Truncated Successfully"))
   }, 
   error = function(err){
     dbRollback(dev_con)
@@ -375,8 +304,7 @@ tryCatch({
   )
 ```
 
-# Insert Staging Tables
-### Combined
+# Insert Staging Table
 ```{r combined staging, echo=FALSE}
 rad_combined_schema <- "OAO_DEVELOPMENT"
 rad_combined_table <- "LPM_RAD_COMBINED_STAGING"
@@ -425,55 +353,6 @@ registerDoSEQ()
 print(paste0(Sys.time(), ": Combined rad data has been added to LPM_RAD_COMBINED_STAGING"))
 ```
 
-### Upload
-```{r upload staging, echo=FALSE}
-rad_premier_schema <- "OAO_DEVELOPMENT"
-rad_premier_table <- "LPM_RAD_UPLOAD_STAGING"
-# convert the each record/row of tibble to INTO clause of insert statment
-inserts <- 
-  lapply(
-    lapply(
-      lapply(split(premier, 
-                   1:nrow(premier)),
-             as.list),
-      as.character),
-    FUN = get_values_premier, rad_premier_schema, rad_premier_table)
-
-# create batches of inserts for insert statements
-chunk_length <- 250
-split_queries <- split(inserts, ceiling(seq_along(inserts)/chunk_length))
-
-# append each batch of inserts to batch insert list
-split_queries_values <- list()
-for (i in 1:length(split_queries)) {
-  row <- glue_collapse(split_queries[[i]], sep = "\n\n")
-  values <- glue('INSERT ALL
-               {row}
-               SELECT 1 from DUAL;')
-  split_queries_values <- append(split_queries_values, values)
-}
-
-# execute parallel inserts of 250 record chunks
-registerDoParallel()
-outputPar <- foreach(i = 1:length(split_queries_values), 
-                     .packages = c("DBI", "odbc")) %dopar% {
-                       dev_con <- dbConnect(odbc(), dev_dsn)
-                       tryCatch({
-                         dbBegin(dev_con)
-                         dbExecute(dev_con, split_queries_values[[i]])
-                         dbCommit(dev_con)
-                         dbDisconnect(dev_con)
-                       },
-                       error = function(err){
-                         print("error")
-                         dbRollback(dev_con)
-                         dbDisconnect(dev_con)
-                       })
-                     }
-registerDoSEQ()
-print(paste0(Sys.time(), ": Premier upload data has been added to LPM_RAD_UPLOAD_STAGING"))
-```
-
 # Merge Staging to PROD
 ```{r merge staging, echo=FALSE}
 merge_combined <- glue(
@@ -482,8 +361,7 @@ merge_combined <- glue(
    ON (dest.UNIQUE_ID = source.UNIQUE_ID)
    WHEN NOT MATCHED THEN
    INSERT (
-    dest.SERVICE_DATE,      
-    dest.PP_END_DATE,       
+    dest.SERVICE_DATE,       
     dest.ORDER_ID,         
     dest.ACCESSION,         
     dest.EXAM,              
@@ -495,18 +373,12 @@ merge_combined <- glue(
     dest.VISIT,             
     dest.RESOURCE_NAME,      
     dest.MODALITY,          
-    dest.CPT4,              
-    dest.EPIC_ID,           
-    dest.EPIC_NAME,         
-    dest.SUPPORT,           
-    dest.DEFINITION_CODE,   
-    dest.DEFINITION_NAME,   
-    dest.COSTCENTER,        
-    dest.SOURCE_TABLE,      
-    dest.UNIQUE_ID)         
+    dest.CPT4, 
+    dest.SOURCE_TABLE,
+    dest.UNIQUE_ID,
+    dest.DATE_ADDED)         
    VALUES (
-    source.SERVICE_DATE,      
-    source.PP_END_DATE,       
+    source.SERVICE_DATE,       
     source.ORDER_ID,         
     source.ACCESSION,         
     source.EXAM,              
@@ -518,41 +390,10 @@ merge_combined <- glue(
     source.VISIT,             
     source.RESOURCE_NAME,      
     source.MODALITY,          
-    source.CPT4,              
-    source.EPIC_ID,           
-    source.EPIC_NAME,         
-    source.SUPPORT,           
-    source.DEFINITION_CODE,   
-    source.DEFINITION_NAME,   
-    source.COSTCENTER,        
-    source.SOURCE_TABLE,      
-    source.UNIQUE_ID);")
-
-merge_upload <- glue(
-  "MERGE INTO LPM_RAD_UPLOAD dest
-   USING OAO_DEVELOPMENT.LPM_RAD_UPLOAD_STAGING source
-   ON (dest.UNIQUE_ID = source.UNIQUE_ID)
-   WHEN NOT MATCHED THEN
-   INSERT (
-    dest.PARTNER,      
-    dest.ENTITY_CODE,       
-    dest.COST_CENTER_CODE,         
-    dest.START_DATE,         
-    dest.END_DATE,              
-    dest.CPT_CODE,   
-    dest.ACTUAL_VOLUME,          
-    dest.BUDGET_VOLUME,      
-    dest.UNIQUE_ID)         
-   VALUES (
-    source.PARTNER,      
-    source.ENTITY_CODE,       
-    source.COST_CENTER_CODE,         
-    source.START_DATE,         
-    source.END_DATE,              
-    source.CPT_CODE,   
-    source.ACTUAL_VOLUME,          
-    source.BUDGET_VOLUME,      
-    source.UNIQUE_ID);")
+    source.CPT4,
+    source.SOURCE_TABLE,
+    source.UNIQUE_ID,
+    source.DATE_ADDED);")
 
 # execute mapping table merge statements
 prod_con <- dbConnect(odbc(), prod_dsn)
@@ -562,8 +403,6 @@ dbBegin(prod_con)
 tryCatch({
   dbExecute(prod_con, merge_combined)
   print("LPM_RAD_COMBINED has been merged")
-  dbExecute(prod_con, merge_upload)
-  print("LPM_RAD_UPLOAD has been merged")
   
   dbCommit(prod_con)
   dbDisconnect(prod_con)
@@ -576,13 +415,27 @@ tryCatch({
     print("Error")
     }
   )
+
+# prod connection
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+# get total rows after data has been merged
+total_rows_after_merge <- tbl(prod_con, "LPM_RAD_COMBINED") %>%
+  summarise(n()) %>%
+  collect() %>%
+  pull()
 ```
 
 # Execution Details
 ```{r runtime, echo=FALSE}
+# calc how long it took to knit markdown
 runtime = round(as.numeric(difftime(Sys.time(), start_time, units = c("mins"))), digits = 2)
+# calc what date data has been updated back to
 rundate = as.character(Sys.Date() - x_days)
+# calc how many rows have been added to the combined rad table
+rows_added = total_rows_after_merge - total_rows
 
 print(paste("Radiant Refresh took", runtime, "minutes to complete"))
 print(paste("Radiant data was refreshed back to", rundate))
+print(paste(staging_rows, "rows were merged to LPM_RAD_COMBINED and", rows_added, "have been added"))
 ```
