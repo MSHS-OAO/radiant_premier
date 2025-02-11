@@ -153,7 +153,7 @@ tryCatch({
   dbExecute(prod_con, merge_cpt_type)
   print("LPM_RAD_MAPPING_CPT_TYPE has been merged")
   dbExecute(prod_con, merge_epic_dep)
-  print("LPM_RAD_MAPPING_epic_dep has been merged")
+  print("LPM_RAD_MAPPING_EPIC_DEP has been merged")
   dbExecute(prod_con, merge_report)
   print("LPM_RAD_MAPPING_REPORT has been merged")
   dbExecute(prod_con, merge_support)
