@@ -284,7 +284,7 @@ order$UNIQUE_ID <- sapply(order$UNIQUE_ID, digest, algo="md5")
 print(paste0(Sys.time(), ": Order Data Pulled Successfully"))
 ```
 
-## Combine Data
+### Combine Data
 ```{r combine data, echo=FALSE}
 # prod connection
 prod_con <- dbConnect(odbc(), prod_dsn)
