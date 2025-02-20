@@ -1,0 +1,197 @@
+---
+title: "premier-refresh"
+date: "`r Sys.time()`"
+output: html_document
+---
+
+```{r libraries constants, include=F}
+library(odbc)
+library(DBI)
+library(glue)
+library(dplyr)
+library(tidyr)
+library(dbplyr)
+library(digest)
+library(doParallel)
+
+# dev and prod dsn strings
+dev_dsn <- "OAO Cloud DB Staging"
+prod_dsn <- "OAO Cloud DB Production"
+
+# constants for how much history to query and current time of execution
+x_days <- 90
+query_date <- Sys.Date() - x_days
+prod_con <- dbConnect(odbc(), prod_dsn)
+paycycle <- tbl(prod_con, "LPM_MAPPING_PAYCYCLE") %>% 
+  collect() %>%
+  mutate(PAYCYCLE_DATE = as.Date(PAYCYCLE_DATE)) %>%
+  filter(PAYCYCLE_DATE >= as.Date(query_date))
+query_date <- min(paycycle$PP_START_DATE)
+start_time <- Sys.time()
+
+# function for creating insert statements on LPM_RAD_PREMIER
+get_values_premier <- function(source_table, destination_schema, destination_table) {
+  
+    CORPORATION_CODE <- source_table[1]  #VARCHAR(6 char)
+    ENTITY_CODE      <- source_table[2]  #VARCAHR(6 char)
+    COSTCENTER       <- source_table[3]  #VARCAHR(15 char)
+    PP_START_DATE    <- source_table[4]  #DATE
+    PP_END_DATE      <- source_table[5]  #DATE
+    CPT4             <- source_table[6]  #VARCHAR(15 char)
+    SERVICE_DATE     <- source_table[7]  #NUMERIC
+    ACTUAL_VOLUME    <- source_table[8]  #DATE
+    UNIQUE_ID        <- source_table[9]  #VARCHAR(50 char)
+    DATE_ADDED       <- source_table[10] #DATE
+    
+    values <- glue("INTO {glue::double_quote(destination_schema)}.{glue::double_quote(destination_table)}
+                   (CORPORATION_CODE, ENTITY_CODE , COSTCENTER, PP_START_DATE, PP_END_DATE, CPT4, 
+                   SERVICE_DATE, ACTUAL_VOLUME, UNIQUE_ID, DATE_ADDED)
+                 
+                   VALUES ('{CORPORATION_CODE}', '{ENTITY_CODE}', '{COSTCENTER}', 
+                   TO_DATE('{PP_START_DATE}', 'yyyy-mm-dd'), TO_DATE('{PP_END_DATE}', 'yyyy-mm-dd'), 
+                   '{CPT4}', TO_DATE('{SERVICE_DATE}', 'yyyy-mm-dd'), '{ACTUAL_VOLUME}', '{UNIQUE_ID}',
+                   TO_DATE('{DATE_ADDED}', 'yyyy-mm-dd'))")
+    
+    return(values)
+}
+```
+
+# Truncate Staging
+```{r truncate staging, echo=FALSE}
+truncate_upload <- glue("TRUNCATE TABLE LPM_RAD_PREMIER_STAGING;")
+
+# execute mapping table merge statements
+dev_con <- dbConnect(odbc(), dev_dsn)
+dbBegin(dev_con)
+
+# execute statements and if there is an error  with one of them rollback changes
+tryCatch({
+  dbExecute(dev_con, truncate_upload)
+  print("LPM_RAD_UPLOAD_STAGING has been truncated")
+  
+  dbCommit(dev_con)
+  dbDisconnect(dev_con)
+  
+  print(paste0(Sys.time(), ": Staging Table Truncated Successfully"))
+  }, 
+  error = function(err){
+    dbRollback(dev_con)
+    dbDisconnect(dev_con)
+    print("Error")
+    }
+  )
+```
+
+# Data Pull
+```{r combined data pull, echo=FALSE}
+# prod connection
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+premier_insert <- glue(
+  "WITH RAD_JOINED AS (
+   SELECT
+        rad.*,
+        paycycle.PP_START_DATE,
+        paycycle.PP_END_DATE,
+        cc.COSTCENTER,
+        support.SUPPORT,
+        '729805' as CORPORATION_CODE,
+        CASE WHEN support.SUPPORT IN ('MSH', 'MSQ') THEN 'NY0014'
+             WHEN support.SUPPORT IN ('MSB', 'MSUS', 'CCW') THEN '630571'
+             WHEN support.SUPPORT = 'MSW' THEN 'NY2162'
+             WHEN support.SUPPORT = 'MSM' THEN 'NY2163'
+        END ENTITY_CODE
+   FROM LPM_RAD_COMBINED rad
+   LEFT JOIN LPM_MAPPING_PAYCYCLE paycycle ON rad.SERVICE_DATE = paycycle.PAYCYCLE_DATE
+   LEFT JOIN LPM_RAD_MAPPING_COSTCENTER cc ON rad.RESOURCE_NAME = cc.RESOURCE_NAME
+   LEFT JOIN LPM_RAD_MAPPING_SUPPORT support ON rad.RESOURCE_NAME = support.RESOURCE_NAME
+   WHERE cc.COSTCENTER IS NOT NULL AND
+         rad.SERVICE_DATE >= DATE \'{query_date}\')
+   SELECT
+        CORPORATION_CODE,
+        ENTITY_CODE,
+        COSTCENTER,
+        PP_START_DATE,
+        PP_END_DATE,
+        CPT4,
+        SERVICE_DATE,
+        COUNT(*) as ACTUAL_VOLUME
+   FROM RAD_JOINED
+   GROUP BY
+        CORPORATION_CODE,
+        ENTITY_CODE,
+        COSTCENTER,
+        PP_START_DATE,
+        PP_END_DATE,
+        CPT4,
+        SERVICE_DATE;")
+
+
+# create, execute and clear result for premier radiant query
+premier_insert_query <- dbSendQuery(prod_con, premier_insert)
+radiant_premier <- dbFetch(premier_insert_query)
+dbClearResult(premier_insert_query)
+
+# add unique ID and date added columns
+radiant_premier <- radiant_premier %>%
+  mutate(
+    SERVICE_DATE = as.character(as.Date(SERVICE_DATE)),
+    PP_END_DATE = as.character(as.Date(PP_END_DATE)),
+    PP_START_DATE = as.character(as.Date(PP_START_DATE)),
+    UNIQUE_ID = 
+    paste0(CORPORATION_CODE, ENTITY_CODE, COSTCENTER, PP_START_DATE,
+           PP_END_DATE, SERVICE_DATE),
+    DATE_ADDED = as.character(Sys.Date()))
+radiant_premier$UNIQUE_ID <- sapply(radiant_premier$UNIQUE_ID, digest, algo="md5")
+  
+print(paste0(Sys.time(), ": Premier Data Pulled Successfully"))
+```
+
+# Insert Staging Table
+```{r radiant premier staging, echo=FALSE}
+rad_premier_schema <- "OAO_DEVELOPMENT"
+rad_premier_table <- "LPM_RAD_PREMIER_STAGING"
+# convert the each record/row of tibble to INTO clause of insert statement
+inserts <- 
+  lapply(
+    lapply(
+      lapply(split(radiant_premier, 
+                   1:nrow(radiant_premier)),
+             as.list),
+      as.character),
+    FUN = get_values_premier, rad_premier_schema, rad_premier_table)
+
+# create batches of inserts for insert statements
+chunk_length <- 250
+split_queries <- split(inserts, ceiling(seq_along(inserts)/chunk_length))
+
+# append each batch of inserts to batch insert list
+split_queries_values <- list()
+for (i in 1:length(split_queries)) {
+  row <- glue_collapse(split_queries[[i]], sep = "\n\n")
+  values <- glue('INSERT ALL
+               {row}
+               SELECT 1 from DUAL;')
+  split_queries_values <- append(split_queries_values, values)
+}
+
+# execute parallel inserts of 250 record chunks
+registerDoParallel()
+outputPar <- foreach(i = 1:length(split_queries_values), 
+                     .packages = c("DBI", "odbc")) %dopar% {
+                       dev_con <- dbConnect(odbc(), dev_dsn)
+                       tryCatch({
+                         dbBegin(dev_con)
+                         dbExecute(dev_con, split_queries_values[[i]])
+                         dbCommit(dev_con)
+                         dbDisconnect(dev_con)
+                       },
+                       error = function(err){
+                         print("error")
+                         dbRollback(dev_con)
+                         dbDisconnect(dev_con)
+                       })
+                     }
+registerDoSEQ()
+print(paste0(Sys.time(), ": Premier rad data has been added to LPM_RAD_PREMIER_STAGING"))
+```
