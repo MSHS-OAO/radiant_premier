@@ -29,6 +29,12 @@ paycycle <- tbl(prod_con, "LPM_MAPPING_PAYCYCLE") %>%
 query_date <- min(paycycle$PP_START_DATE)
 start_time <- Sys.time()
 
+# get current row count in LPM_RAD_PREMIER
+row_count <- tbl(prod_con, "LPM_RAD_PREMIER") %>%
+  summarise(n()) %>%
+  collect() %>%
+  pull()
+
 # function for creating insert statements on LPM_RAD_PREMIER
 get_values_premier <- function(source_table, destination_schema, destination_table) {
   
@@ -37,19 +43,18 @@ get_values_premier <- function(source_table, destination_schema, destination_tab
     COSTCENTER       <- source_table[3]  #VARCAHR(15 char)
     PP_START_DATE    <- source_table[4]  #DATE
     PP_END_DATE      <- source_table[5]  #DATE
-    CPT4             <- source_table[6]  #VARCHAR(15 char)
-    SERVICE_DATE     <- source_table[7]  #NUMERIC
+    SERVICE_DATE     <- source_table[6]  #NUMERIC
+    CPT4             <- source_table[7]  #VARCHAR(15 char)
     ACTUAL_VOLUME    <- source_table[8]  #DATE
-    UNIQUE_ID        <- source_table[9]  #VARCHAR(50 char)
-    DATE_ADDED       <- source_table[10] #DATE
+    DATE_ADDED       <- source_table[9]  #DATE
     
     values <- glue("INTO {glue::double_quote(destination_schema)}.{glue::double_quote(destination_table)}
-                   (CORPORATION_CODE, ENTITY_CODE , COSTCENTER, PP_START_DATE, PP_END_DATE, CPT4, 
-                   SERVICE_DATE, ACTUAL_VOLUME, UNIQUE_ID, DATE_ADDED)
+                   (CORPORATION_CODE, ENTITY_CODE , COSTCENTER, PP_START_DATE, PP_END_DATE, SERVICE_DATE,
+                   CPT4, ACTUAL_VOLUME, DATE_ADDED)
                  
                    VALUES ('{CORPORATION_CODE}', '{ENTITY_CODE}', '{COSTCENTER}', 
                    TO_DATE('{PP_START_DATE}', 'yyyy-mm-dd'), TO_DATE('{PP_END_DATE}', 'yyyy-mm-dd'), 
-                   '{CPT4}', TO_DATE('{SERVICE_DATE}', 'yyyy-mm-dd'), '{ACTUAL_VOLUME}', '{UNIQUE_ID}',
+                   TO_DATE('{SERVICE_DATE}', 'yyyy-mm-dd'), '{CPT4}', '{ACTUAL_VOLUME}',
                    TO_DATE('{DATE_ADDED}', 'yyyy-mm-dd'))")
     
     return(values)
@@ -67,7 +72,7 @@ dbBegin(dev_con)
 # execute statements and if there is an error  with one of them rollback changes
 tryCatch({
   dbExecute(dev_con, truncate_upload)
-  print("LPM_RAD_UPLOAD_STAGING has been truncated")
+  print("LPM_RAD_PREMIER_STAGING has been truncated")
   
   dbCommit(dev_con)
   dbDisconnect(dev_con)
@@ -80,6 +85,22 @@ tryCatch({
     print("Error")
     }
   )
+```
+
+# Delete 90 Day
+```{r delete 90 day, echo=FALSE}
+delete_90_day <- glue(
+  "DELETE FROM LPM_RAD_PREMIER
+   WHERE SERVICE_DATE >= DATE \'{query_date}\';")
+
+# execute delete query
+prod_con <- dbConnect(odbc(), prod_dsn)
+dbBegin(prod_con)
+dbExecute(prod_con, delete_90_day)
+dbCommit(prod_con)
+dbDisconnect(prod_con)
+
+print(paste0(Sys.time(), ": The last 90 days have been deleted from LPM_RAD_PREMIER"))
 ```
 
 # Data Pull
@@ -113,8 +134,8 @@ premier_insert <- glue(
         COSTCENTER,
         PP_START_DATE,
         PP_END_DATE,
-        CPT4,
         SERVICE_DATE,
+        CPT4,
         COUNT(*) as ACTUAL_VOLUME
    FROM RAD_JOINED
    GROUP BY
@@ -138,11 +159,7 @@ radiant_premier <- radiant_premier %>%
     SERVICE_DATE = as.character(as.Date(SERVICE_DATE)),
     PP_END_DATE = as.character(as.Date(PP_END_DATE)),
     PP_START_DATE = as.character(as.Date(PP_START_DATE)),
-    UNIQUE_ID = 
-    paste0(CORPORATION_CODE, ENTITY_CODE, COSTCENTER, PP_START_DATE,
-           PP_END_DATE, SERVICE_DATE),
     DATE_ADDED = as.character(Sys.Date()))
-radiant_premier$UNIQUE_ID <- sapply(radiant_premier$UNIQUE_ID, digest, algo="md5")
   
 print(paste0(Sys.time(), ": Premier Data Pulled Successfully"))
 ```
@@ -194,4 +211,54 @@ outputPar <- foreach(i = 1:length(split_queries_values),
                      }
 registerDoSEQ()
 print(paste0(Sys.time(), ": Premier rad data has been added to LPM_RAD_PREMIER_STAGING"))
+```
+
+# Insert To PROD
+```{r merge staging, echo=FALSE}
+insert_premier <- glue(
+  "INSERT INTO LPM_RAD_PREMIER
+   SELECT * 
+   FROM OAO_DEVELOPMENT.LPM_RAD_PREMIER_STAGING;" 
+)
+
+# prod connection
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+# execute statements and if there is an error  with one of them rollback changes
+tryCatch({
+  dbBegin(prod_con)
+  
+  dbExecute(prod_con, insert_premier)
+  print("LPM_RAD_PREMIER_STAGING has been inserted to LPM_RAD_PREMIER")
+  
+  dbCommit(prod_con)
+  dbDisconnect(prod_con)
+  
+  print(paste0(Sys.time(), ": Production Table Updated Successfully"))
+  }, 
+  error = function(err){
+    dbRollback(prod_con)
+    dbDisconnect(prod_con)
+    print("Error")
+    }
+  )
+
+# prod connection
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+# get total rows after data has been merged
+total_rows_after_insert <- tbl(prod_con, "LPM_RAD_PREMIER") %>%
+  summarise(n()) %>%
+  collect() %>%
+  pull()
+```
+
+# Execution Details
+```{r runtime, echo=FALSE}
+# calc how long it took to knit markdown
+runtime = round(as.numeric(difftime(Sys.time(), start_time, units = c("mins"))), digits = 2)
+
+print(paste("Radiant Refresh took", runtime, "minutes to complete"))
+print(paste("Radiant data was refreshed back to", as.character(query_date)))
+print(paste(nrow(radiant_premier), "rows were inserted into LPM_RAD_PREMIER"))
 ```
