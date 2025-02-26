@@ -121,6 +121,7 @@ premier_insert <- glue(
              WHEN support.SUPPORT IN ('MSB', 'MSUS', 'CCW') THEN '630571'
              WHEN support.SUPPORT = 'MSW' THEN 'NY2162'
              WHEN support.SUPPORT = 'MSM' THEN 'NY2163'
+             WHEN rad.RESOURCE_NAME = 'MSH 1176 RAD CT' THEN 'NY0014'
         END ENTITY_CODE
    FROM LPM_RAD_COMBINED rad
    LEFT JOIN LPM_MAPPING_PAYCYCLE paycycle ON rad.SERVICE_DATE = paycycle.PAYCYCLE_DATE
