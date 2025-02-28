@@ -5,6 +5,10 @@ output: html_document
 ---
 
 ```{r libraries constants, include=F}
+# get start time of script
+start_time <- Sys.time()
+
+# libraries
 library(odbc)
 library(DBI)
 library(glue)
@@ -13,22 +17,42 @@ library(tidyr)
 library(dbplyr)
 library(digest)
 library(doParallel)
+library(lubridate)
 
 # dev and prod dsn strings
 dev_dsn <- "OAO Cloud DB Staging"
 prod_dsn <- "OAO Cloud DB Production"
 
-# constants for how much history to query and current time of execution
+# radiant volume directory
+rad_dir <- paste0("/SharedDrive/deans/Presidents/SixSigma/MSHS Productivity/",
+                  "Productivity/Volume - Data/Multisite Volumes/",
+                  "Radiology - Radiant/")
+
+# constants for ~# of days back to refresh/upload
 x_days <- 90
 query_date <- Sys.Date() - x_days
+
+# get pay period of 90 days prior
 prod_con <- dbConnect(odbc(), prod_dsn)
 paycycle <- tbl(prod_con, "LPM_MAPPING_PAYCYCLE") %>% 
   collect() %>%
   mutate(PAYCYCLE_DATE = as.Date(PAYCYCLE_DATE)) %>%
   filter(PAYCYCLE_DATE >= as.Date(query_date))
 query_date <- min(paycycle$PP_START_DATE)
-start_time <- Sys.time()
 
+# get max date for premier upload
+max_date <- paycycle %>% 
+  select(PP_END_DATE, PREMIER_DISTRIBUTION) %>%
+  distinct() %>%
+  mutate(PP_END_DATE = as.Date(PP_END_DATE)) %>%
+  filter(year(PP_END_DATE) <= year(Sys.Date()),
+         month(PP_END_DATE) <= month(Sys.Date()),
+         PREMIER_DISTRIBUTION == 1) %>%
+  arrange(desc(PP_END_DATE)) %>%
+  select(PP_END_DATE) %>%
+  slice(2) %>%
+  pull()
+  
 # get current row count in LPM_RAD_PREMIER
 row_count <- tbl(prod_con, "LPM_RAD_PREMIER") %>%
   summarise(n()) %>%
@@ -252,6 +276,75 @@ total_rows_after_insert <- tbl(prod_con, "LPM_RAD_PREMIER") %>%
   summarise(n()) %>%
   collect() %>%
   pull()
+```
+
+# Create Zero Upload
+```{r premier upload, echo=FALSE}
+# read in most recent upload file
+zero_files <- file.info(list.files(paste0(rad_dir, "uploads/"),
+                             full.names = T,
+                             pattern = "*.csv")) %>%
+    arrange(desc(mtime))
+zero <- read.csv(rownames(zero_files)[1],
+               check.names = FALSE) %>%
+  filter(as.Date(`Start Date`, format = "%m/%d/%Y") >= as.Date(query_date)) %>%
+  mutate(`Actual Volume` = '0')
+
+# get max date of zero file
+max_zero <- max(as.Date(zero$`End Date`, format = "%m/%d/%Y"))
+
+# save 90 day premier upload
+write.csv(premier_upload, paste0(rad_dir, "uploads/zero/MSHS_RADIANT ZERO_",
+                                 query_date, "_", max_zero, ".csv"),
+          row.names = FALSE)
+```
+
+# Create Premier Upload
+```{r premier upload, echo=FALSE}
+# prod connection
+prod_con <- dbConnect(odbc(), prod_dsn)
+
+# pull last 90 days of data from production
+premier_query <- glue(
+  "SELECT CORPORATION_CODE, 
+          ENTITY_CODE, 
+          COSTCENTER, 
+          PP_START_DATE,
+          PP_END_DATE, 
+          CPT4,
+          sum(ACTUAL_VOLUME) as ACTUAL_VOLUME
+   FROM LPM_RAD_PREMIER
+   WHERE SERVICE_DATE >= DATE \'{query_date}\' AND
+         SERVICE_DATE <= DATE \'{max_date}\'
+   GROUP BY CORPORATION_CODE, 
+            ENTITY_CODE, 
+            COSTCENTER, 
+            PP_START_DATE,
+            PP_END_DATE, 
+            CPT4;")
+
+# create, execute and clear result for premier radiant query
+premier_query <- dbSendQuery(prod_con, premier_query)
+premier_upload <- dbFetch(premier_query)
+dbClearResult(premier_query)
+
+# further format for premier upload 
+premier_upload <- premier_upload %>%
+  mutate(`Budget Volume` = '0',
+         PP_START_DATE = format(PP_START_DATE, "%m/%d/%Y"),
+         PP_END_DATE = format(PP_END_DATE, "%m/%d/%Y")) %>%
+  rename(`Corporation Code` = CORPORATION_CODE,
+         `Entity Code` = ENTITY_CODE,
+         `Cost Center Code` = COSTCENTER,
+         `Start Date` = PP_START_DATE,
+         `End Date` = PP_END_DATE,
+         `CPT Code` = CPT4,
+         `Actual Volume` = ACTUAL_VOLUME)
+
+# save 90 day premier upload
+write.csv(premier_upload, paste0(rad_dir, "uploads/MSHS_RADIANT_",
+                                 query_date, "_", max_date, ".csv"),
+          row.names = FALSE)
 ```
 
 # Execution Details
