@@ -308,6 +308,8 @@ max_zero <- max(as.Date(zero$`End Date`, format = "%m/%d/%Y"))
 write.csv(zero, paste0(rad_dir, "uploads/zero/MSHS_RADIANT ZERO_",
                                  query_date, "_", max_zero, ".csv"),
           row.names = FALSE)
+
+print(paste0(Sys.time(), ": Premier Zero Upload Created Successfully"))
 ```
 
 # Create Premier Upload
@@ -401,6 +403,8 @@ premier_upload <- unique_upload %>%
 write.csv(premier_upload, paste0(rad_dir, "uploads/MSHS_RADIANT_",
                                  query_date, "_", max_date, ".csv"),
           row.names = FALSE)
+
+print(paste0(Sys.time(), ": Premier Upload Created Successfully"))
 ```
 
 # Execution Details
