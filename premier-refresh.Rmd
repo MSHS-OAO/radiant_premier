@@ -133,8 +133,20 @@ print(paste0(Sys.time(), ": The last 90 days have been deleted from LPM_RAD_PREM
 prod_con <- dbConnect(odbc(), prod_dsn)
 
 premier_insert <- glue(
-  "WITH RAD_JOINED AS (
-   SELECT
+  "WITH RESOURCE_LOGIC AS (
+    SELECT rad.*,
+           CASE WHEN RESOURCE_NAME = 'MSB CT 1' AND
+                     substr(EXAM,1,2) IN ('IR','NS')
+               THEN 'MSB IN 1'
+               WHEN RESOURCE_NAME = 'BC PET CT 1' AND
+                    substr(EXAM,1,6) = 'NM PET'
+               THEN 'BC PET INJECTIONS'
+               ELSE RESOURCE_NAME
+        END RESOURCE_NAME_LOGIC
+    FROM LPM_RAD_COMBINED rad
+    WHERE SERVICE_DATE >= DATE \'{query_date}\'),
+   RAD_JOINED AS (
+    SELECT
         rad.*,
         paycycle.PP_START_DATE,
         paycycle.PP_END_DATE,
@@ -147,12 +159,11 @@ premier_insert <- glue(
              WHEN support.SUPPORT = 'MSM' THEN 'NY2163'
              WHEN rad.RESOURCE_NAME = 'MSH 1176 RAD CT' THEN 'NY0014'
         END ENTITY_CODE
-   FROM LPM_RAD_COMBINED rad
+   FROM RESOURCE_LOGIC rad
    LEFT JOIN LPM_MAPPING_PAYCYCLE paycycle ON rad.SERVICE_DATE = paycycle.PAYCYCLE_DATE
-   LEFT JOIN LPM_RAD_MAPPING_COSTCENTER cc ON rad.RESOURCE_NAME = cc.RESOURCE_NAME
-   LEFT JOIN LPM_RAD_MAPPING_SUPPORT support ON rad.RESOURCE_NAME = support.RESOURCE_NAME
-   WHERE cc.COSTCENTER IS NOT NULL AND
-         rad.SERVICE_DATE >= DATE \'{query_date}\')
+   LEFT JOIN LPM_RAD_MAPPING_COSTCENTER cc ON rad.RESOURCE_NAME_LOGIC = cc.RESOURCE_NAME
+   LEFT JOIN LPM_RAD_MAPPING_SUPPORT support ON rad.RESOURCE_NAME_LOGIC = support.RESOURCE_NAME
+   WHERE cc.COSTCENTER IS NOT NULL)
    SELECT
         CORPORATION_CODE,
         ENTITY_CODE,
@@ -169,8 +180,8 @@ premier_insert <- glue(
         COSTCENTER,
         PP_START_DATE,
         PP_END_DATE,
-        CPT4,
-        SERVICE_DATE;")
+        SERVICE_DATE,
+        CPT4;")
 
 
 # create, execute and clear result for premier radiant query
@@ -239,7 +250,7 @@ print(paste0(Sys.time(), ": Premier rad data has been added to LPM_RAD_PREMIER_S
 ```
 
 # Insert To PROD
-```{r merge staging, echo=FALSE}
+```{r insert prod, echo=FALSE}
 insert_premier <- glue(
   "INSERT INTO LPM_RAD_PREMIER
    SELECT * 
@@ -279,7 +290,7 @@ total_rows_after_insert <- tbl(prod_con, "LPM_RAD_PREMIER") %>%
 ```
 
 # Create Zero Upload
-```{r premier upload, echo=FALSE}
+```{r premier zero, echo=FALSE}
 # read in most recent upload file
 zero_files <- file.info(list.files(paste0(rad_dir, "uploads/"),
                              full.names = T,
@@ -294,7 +305,7 @@ zero <- read.csv(rownames(zero_files)[1],
 max_zero <- max(as.Date(zero$`End Date`, format = "%m/%d/%Y"))
 
 # save 90 day premier upload
-write.csv(premier_upload, paste0(rad_dir, "uploads/zero/MSHS_RADIANT ZERO_",
+write.csv(zero, paste0(rad_dir, "uploads/zero/MSHS_RADIANT ZERO_",
                                  query_date, "_", max_zero, ".csv"),
           row.names = FALSE)
 ```
@@ -328,8 +339,53 @@ premier_query <- dbSendQuery(prod_con, premier_query)
 premier_upload <- dbFetch(premier_query)
 dbClearResult(premier_query)
 
+# pull all unique cc 
+unique_cc <- tbl(prod_con, "LPM_RAD_MAPPING_COSTCENTER") %>%
+  filter(!is.na(COSTCENTER)) %>%
+  distinct() %>%
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_SUPPORT"),
+            by = c("RESOURCE_NAME" = "RESOURCE_NAME")) %>%
+  mutate(SUPPORT = case_when(
+    RESOURCE_NAME == 'MSH 1176 RAD CT' ~ "MSH",
+    TRUE ~ SUPPORT)) %>%
+  select(COSTCENTER, SUPPORT) %>%
+  collect()
+
+# pull unique pp for upcoming upload
+unique_pp <- tbl(prod_con, "LPM_MAPPING_PAYCYCLE") %>%
+  collect() %>%
+  filter(as.Date(PAYCYCLE_DATE) >= as.Date(query_date),
+         as.Date(PAYCYCLE_DATE) <= as.Date(max_date)) %>%
+  select(PP_START_DATE, PP_END_DATE) %>%
+  distinct() 
+
+# make df of all unique combos of pp and cc in upload
+unique_combo <- expand_grid(unique_cc, unique_pp) %>%
+  mutate()
+
+# join unique combos with upload to find cc's without data and fill in gaps
+unique_upload <- premier_upload %>%
+  full_join(unique_combo, 
+             by = c("COSTCENTER" = "COSTCENTER",
+                    "PP_START_DATE" = "PP_START_DATE",
+                    "PP_END_DATE" = "PP_END_DATE")) %>%
+  mutate(CORPORATION_CODE = '729805',
+         ENTITY_CODE = case_when(
+           is.na(ENTITY_CODE) & SUPPORT %in% c("MSB", "CCW", "MSUS") ~ "630571",
+           is.na(ENTITY_CODE) & SUPPORT %in% c("MSH", "MSQ") ~ "NY0014",
+           is.na(ENTITY_CODE) & SUPPORT == "MSW" ~ "NY2162",
+           is.na(ENTITY_CODE) & SUPPORT == "MSM" ~ "NY2163",
+           TRUE ~ ENTITY_CODE),
+         CPT4 = case_when(
+           is.na(CPT4) ~ "71045",
+           TRUE ~ CPT4),
+         ACTUAL_VOLUME = case_when(
+           is.na(ACTUAL_VOLUME) ~ 0,
+           TRUE ~ ACTUAL_VOLUME)) %>%
+  select(-SUPPORT)
+
 # further format for premier upload 
-premier_upload <- premier_upload %>%
+premier_upload <- unique_upload %>%
   mutate(`Budget Volume` = '0',
          PP_START_DATE = format(PP_START_DATE, "%m/%d/%Y"),
          PP_END_DATE = format(PP_END_DATE, "%m/%d/%Y")) %>%
