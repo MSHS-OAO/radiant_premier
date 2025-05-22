@@ -345,11 +345,11 @@ dbClearResult(premier_query)
 unique_cc <- tbl(prod_con, "LPM_RAD_MAPPING_COSTCENTER") %>%
   filter(!is.na(COSTCENTER)) %>%
   distinct() %>%
-  left_join(tbl(prod_con, "LPM_RAD_MAPPING_SUPPORT"),
+  left_join(tbl(prod_con, "LPM_RAD_MAPPING_SUPPORT") %>%
+              mutate(SUPPORT = case_when(
+                RESOURCE_NAME == 'MSH 1176 RAD CT' ~ "MSH",
+                TRUE ~ SUPPORT)),
             by = c("RESOURCE_NAME" = "RESOURCE_NAME")) %>%
-  mutate(SUPPORT = case_when(
-    RESOURCE_NAME == 'MSH 1176 RAD CT' ~ "MSH",
-    TRUE ~ SUPPORT)) %>%
   select(COSTCENTER, SUPPORT) %>%
   collect()
 
