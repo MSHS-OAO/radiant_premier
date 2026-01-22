@@ -45,12 +45,11 @@ max_date <- paycycle %>%
   select(PP_END_DATE, PREMIER_DISTRIBUTION) %>%
   distinct() %>%
   mutate(PP_END_DATE = as.Date(PP_END_DATE)) %>%
-  filter(year(PP_END_DATE) <= year(Sys.Date()),
-         month(PP_END_DATE) <= month(Sys.Date()),
+  filter(PP_END_DATE < floor_date(Sys.Date(), unit = "month"),
          PREMIER_DISTRIBUTION == 1) %>%
   arrange(desc(PP_END_DATE)) %>%
   select(PP_END_DATE) %>%
-  slice(2) %>%
+  slice_head() %>% 
   pull()
   
 # get current row count in LPM_RAD_PREMIER
